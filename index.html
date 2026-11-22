@@ -175,7 +175,7 @@ function diag(){
 }
 
 // ---------- matchmaking (PeerJS server protocol) ----------
-let ws, pc, dc, peerId, beat, pendingIce = [], role, joinTimer;
+let ws, pc, dc, peerId, beat, pendingIce = [], role, joinTimer, offerTimer, hostId, reconnecting = false;
 
 function openSignal(id){
   return new Promise((resolve, reject)=>{
@@ -184,7 +184,8 @@ function openSignal(id){
     const t = setTimeout(()=>reject('net'), 12000);
     ws.onmessage = e => {
       let m; try { m = JSON.parse(e.data); } catch { return; }
-      if (m.type === 'OPEN'){ clearTimeout(t); beat = setInterval(()=>ws.readyState===1 && ws.send('{"type":"HEARTBEAT"}'), 5000); resolve(); }
+      if (m.type === 'OPEN'){ clearTimeout(t); clearInterval(beat); beat = setInterval(()=>ws && ws.readyState===1 && ws.send('{"type":"HEARTBEAT"}'), 5000);
+        const me = ws; ws.onclose = () => { if (ws === me) onSignalLost(); }; resolve(); }
       else if (m.type === 'ID-TAKEN'){ clearTimeout(t); reject('taken'); }
       else if (m.type === 'ERROR' || m.type === 'INVALID-KEY'){ clearTimeout(t); reject('net'); }
       else onSignal(m);
@@ -193,7 +194,24 @@ function openSignal(id){
   });
 }
 function signal(type, payload){ if (ws && ws.readyState === 1) ws.send(JSON.stringify({type, dst:peerId, payload})); }
-function closeSignal(){ clearInterval(beat); try{ ws && ws.close(); }catch{} ws = null; }
+function closeSignal(){ clearInterval(beat); const w = ws; ws = null; if (w){ w.onclose = null; try{ w.close(); }catch{} } }
+
+// The PIN device lost its link to the PIN server (screen off, app switched, network blip).
+// While still waiting for the other device, quietly get the same PIN back.
+async function onSignalLost(){
+  clearInterval(beat); ws = null;
+  if (role !== 'host' || pc || paired || reconnecting) return;
+  reconnecting = true; step('PIN server lost, reconnecting');
+  for (let i = 0; i < 40 && role === 'host' && !pc && !paired; i++){
+    try { await openSignal(hostId); step('PIN server ok again'); reconnecting = false; return; }
+    catch(e){ closeSignal(); await new Promise(r => setTimeout(r, 3000)); }   // 'taken' = server still holds the old link; wait it out
+  }
+  reconnecting = false;
+  if (role === 'host' && !pc && !paired) fail('Lost the connection to the PIN server. Tap Cancel to make a new PIN.');
+}
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible' && role === 'host' && !pc && !paired && (!ws || ws.readyState > 1)) onSignalLost();
+});
 
 function makePC(){
   pc = new RTCPeerConnection(ICE);
@@ -209,6 +227,7 @@ async function flushIce(){ for (const c of pendingIce.splice(0)) { try{ await pc
 async function onSignal(m){
   const p = m.payload || {};
   if (m.type === 'OFFER' && role === 'host' && !pc){
+   try {
     peerId = m.src; step('other device found'); makePC();
     pc.ondatachannel = e => setupChannel(e.channel);
     await pc.setRemoteDescription(p.sdp); await flushIce();
@@ -216,21 +235,24 @@ async function onSignal(m){
     signal('ANSWER', {sdp:pc.localDescription});
     $('mWait').textContent = 'Device found, connecting';
     joinTimer = setTimeout(()=>{ if (!paired && role === 'host') fail("Found the other device but couldn't connect directly. Your networks may block device-to-device links — try both on the same Wi-Fi, or one on a phone hotspot. Tap Cancel to make a new PIN."); }, 30000);
+   } catch(e){ step('error: ' + (e && e.message || e)); fail('Something went wrong answering the other device. Tap Cancel and try again.'); }
   } else if (m.type === 'ANSWER' && pc){
-    step('other device answered');
+    if (pc.remoteDescription) return;          // duplicate answer to a re-sent request
+    clearInterval(offerTimer); step('other device answered');
     await pc.setRemoteDescription(p.sdp); await flushIce();
   } else if (m.type === 'CANDIDATE' && m.src === peerId){
     const t = ctype(p.candidate); if (t){ D.theirs.add(t); diag(); }
     addIce(p.candidate);
   } else if (m.type === 'EXPIRE' && role === 'join'){
-    fail('No device found with that PIN. Check the number and that the other page is still open.');
+    // Nobody is on that PIN right now. It may be a phone that is waking up, so keep asking until the timer runs out.
+    if (!D.steps.includes('PIN not found yet')) step('PIN not found yet');
   }
 }
 
 function fail(text){
   if (paired) return lost(text);
   if (!role) return;                       // already failed once — keep the first, real reason
-  const was = role; role = null; clearTimeout(joinTimer);
+  const was = role; role = null; clearTimeout(joinTimer); clearInterval(offerTimer);
   status('Not paired','bad');
   if (was === 'host') err($('mWait'), text);
   else { err($('mStart'), text); $('bJoin').disabled = false; $('bHost').disabled = false; }
@@ -245,7 +267,7 @@ $('bHost').onclick = async () => {
   for (let tries = 0; tries < 5; tries++){
     const pin = String(Math.floor(100000 + Math.random()*900000));
     try {
-      await openSignal(PREFIX + pin); D.steps = []; step('PIN server ok');
+      await openSignal(PREFIX + pin); hostId = PREFIX + pin; D.steps = []; step('PIN server ok');
       $('pinBox').innerHTML = [...pin].map(d=>`<span>${d}</span>`).join('');
       const n = pending.length;
       $('waitFiles').textContent = n ? `${n} file${n>1?'s':''} will send automatically once paired.` : '';
@@ -273,11 +295,19 @@ $('bJoin').onclick = async () => {
   setupChannel(pc.createDataChannel('files', {ordered:true}));
   await pc.setLocalDescription(await pc.createOffer());
   signal('OFFER', {sdp:pc.localDescription}); step('asked PIN ' + pin);
+  // A phone that was briefly asleep can miss the first request, so ask again every few seconds.
+  let asks = 1; const askAt = D.steps.length - 1;
+  offerTimer = setInterval(() => {
+    if (role !== 'join' || !pc || pc.remoteDescription) return clearInterval(offerTimer);
+    signal('OFFER', {sdp:pc.localDescription}); D.steps[askAt] = `asked PIN ${pin} (${++asks}x)`; diag();
+  }, 4000);
   joinTimer = setTimeout(()=>{
     if (paired || role !== 'join') return;
     fail(D.steps.includes('other device answered')
       ? "Found the other device but couldn't connect directly. Your networks may block device-to-device links — try both on the same Wi-Fi, or one on a phone hotspot."
-      : 'No answer from that PIN. Check the number and that the other page is still open.');
+      : D.steps.includes('PIN not found yet')
+        ? 'No device is using that PIN. Check the number, and keep the PIN page open with its screen on.'
+        : 'The PIN device did not respond. Keep the PIN page open with its screen on (don\'t switch apps), then try again.');
   }, 30000);
 };
 
