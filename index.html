@@ -42,6 +42,7 @@ h1 span{background:var(--yellow);padding:0 8px;border:var(--b);display:inline-bl
 .center{text-align:center}
 .msg{margin-top:14px;font-weight:600;font-size:14px;min-height:20px}
 .msg.err{color:#c4161c}
+.diag{margin-top:10px;font-size:12px;color:var(--muted);font-family:ui-monospace,Menlo,Consolas,monospace;word-break:break-word}
 .dots::after{content:'';animation:d 1.2s steps(4) infinite}
 @keyframes d{0%{content:''}25%{content:'.'}50%{content:'..'}75%{content:'...'}}
 .drop{padding:36px 20px;text-align:center;cursor:pointer;display:block;transition:transform .08s,box-shadow .08s,background .15s}
@@ -111,6 +112,7 @@ footer{margin-top:40px;font-size:13px;color:var(--muted);text-align:center}
     </div>
   </div>
   <div class="msg center" id="mStart"></div>
+  <div class="diag center" id="dStart"></div>
 </section>
 
 <!-- 2. Showing PIN -->
@@ -121,6 +123,7 @@ footer{margin-top:40px;font-size:13px;color:var(--muted);text-align:center}
     <div class="pin" id="pinBox"></div>
     <div class="msg dots" id="mWait">Waiting for the other device</div>
     <div class="dt" id="waitFiles"></div>
+    <div class="diag" id="dWait"></div>
     <br><button class="btn w sm" onclick="location.reload()">Cancel</button>
   </div>
 </section>
@@ -160,8 +163,19 @@ function err(el,t){el.classList.remove('dots');el.classList.add('err');el.textCo
 function size(n){return n<1024?n+' B':n<1048576?(n/1024).toFixed(1)+' KB':n<1073741824?(n/1048576).toFixed(1)+' MB':(n/1073741824).toFixed(2)+' GB'}
 const rand = n => Array.from(crypto.getRandomValues(new Uint8Array(n)),b=>(b%36).toString(36)).join('');
 
+// ---------- connection details (shown under the messages) ----------
+const D = {steps:[], ice:'', mine:new Set(), theirs:new Set()};
+function step(t){ D.steps.push(t); diag(); }
+function ctype(c){ const m = / typ (\w+)/.exec((c && c.candidate) || ''); return m ? m[1] : null; }
+function diag(){
+  const parts = [...D.steps];
+  if (D.ice) parts.push('direct link: ' + D.ice);
+  if (D.mine.size || D.theirs.size) parts.push('routes here: ' + ([...D.mine].join('+') || 'none') + ', there: ' + ([...D.theirs].join('+') || 'none'));
+  const t = parts.join(' → '); $('dStart').textContent = t; $('dWait').textContent = t;
+}
+
 // ---------- matchmaking (PeerJS server protocol) ----------
-let ws, pc, dc, peerId, beat, pendingIce = [], role;
+let ws, pc, dc, peerId, beat, pendingIce = [], role, joinTimer;
 
 function openSignal(id){
   return new Promise((resolve, reject)=>{
@@ -183,9 +197,10 @@ function closeSignal(){ clearInterval(beat); try{ ws && ws.close(); }catch{} ws 
 
 function makePC(){
   pc = new RTCPeerConnection(ICE);
-  pc.onicecandidate = e => e.candidate && signal('CANDIDATE', {candidate:e.candidate});
+  pc.onicecandidate = e => { if (e.candidate){ const t = ctype(e.candidate); if (t) D.mine.add(t); diag(); signal('CANDIDATE', {candidate:e.candidate}); } };
+  pc.oniceconnectionstatechange = () => { if (pc){ D.ice = pc.iceConnectionState; diag(); } };
   pc.onconnectionstatechange = () => {
-    if (pc.connectionState === 'failed') fail("Couldn't connect directly. Your router may block devices from talking to each other — try a phone hotspot.");
+    if (pc && pc.connectionState === 'failed') fail("Found the other device but couldn't connect directly. Your networks may block device-to-device links — try both on the same Wi-Fi, or one on a phone hotspot.");
   };
 }
 async function addIce(c){ if (pc && pc.remoteDescription) { try{ await pc.addIceCandidate(c); }catch{} } else pendingIce.push(c); }
@@ -194,15 +209,18 @@ async function flushIce(){ for (const c of pendingIce.splice(0)) { try{ await pc
 async function onSignal(m){
   const p = m.payload || {};
   if (m.type === 'OFFER' && role === 'host' && !pc){
-    peerId = m.src; makePC();
+    peerId = m.src; step('other device found'); makePC();
     pc.ondatachannel = e => setupChannel(e.channel);
     await pc.setRemoteDescription(p.sdp); await flushIce();
     await pc.setLocalDescription(await pc.createAnswer());
     signal('ANSWER', {sdp:pc.localDescription});
     $('mWait').textContent = 'Device found, connecting';
+    joinTimer = setTimeout(()=>{ if (!paired && role === 'host') fail("Found the other device but couldn't connect directly. Your networks may block device-to-device links — try both on the same Wi-Fi, or one on a phone hotspot. Tap Cancel to make a new PIN."); }, 30000);
   } else if (m.type === 'ANSWER' && pc){
+    step('other device answered');
     await pc.setRemoteDescription(p.sdp); await flushIce();
   } else if (m.type === 'CANDIDATE' && m.src === peerId){
+    const t = ctype(p.candidate); if (t){ D.theirs.add(t); diag(); }
     addIce(p.candidate);
   } else if (m.type === 'EXPIRE' && role === 'join'){
     fail('No device found with that PIN. Check the number and that the other page is still open.');
@@ -211,10 +229,13 @@ async function onSignal(m){
 
 function fail(text){
   if (paired) return lost(text);
+  if (!role) return;                       // already failed once — keep the first, real reason
+  const was = role; role = null; clearTimeout(joinTimer);
   status('Not paired','bad');
-  if (role === 'host') err($('mWait'), text);
+  if (was === 'host') err($('mWait'), text);
   else { err($('mStart'), text); $('bJoin').disabled = false; $('bHost').disabled = false; }
-  closeSignal(); try{ pc && pc.close(); }catch{} pc = null;
+  if (dc){ dc.onclose = null; dc.onopen = null; }
+  closeSignal(); try{ pc && pc.close(); }catch{} pc = null; dc = null;
 }
 
 // Device 1: create a PIN and wait
@@ -224,7 +245,7 @@ $('bHost').onclick = async () => {
   for (let tries = 0; tries < 5; tries++){
     const pin = String(Math.floor(100000 + Math.random()*900000));
     try {
-      await openSignal(PREFIX + pin);
+      await openSignal(PREFIX + pin); D.steps = []; step('PIN server ok');
       $('pinBox').innerHTML = [...pin].map(d=>`<span>${d}</span>`).join('');
       const n = pending.length;
       $('waitFiles').textContent = n ? `${n} file${n>1?'s':''} will send automatically once paired.` : '';
@@ -244,14 +265,20 @@ $('bJoin').onclick = async () => {
   if (pin.length !== 6) { err($('mStart'),'Enter the 6-digit PIN.'); return; }
   role = 'join'; $('bJoin').disabled = true; $('bHost').disabled = true;
   $('mStart').className='msg center dots'; $('mStart').textContent='Connecting'; status('Connecting','wait');
-  try { await openSignal(PREFIX + 'j' + rand(12)); }
+  D.steps = []; D.ice = ''; D.mine.clear(); D.theirs.clear(); diag();
+  try { await openSignal(PREFIX + 'j' + rand(12)); step('PIN server ok'); }
   catch { role = null; $('bJoin').disabled = false; $('bHost').disabled = false; status('Offline','bad');
           err($('mStart'),'Could not reach the internet to check the PIN. Connect and try again.'); return; }
   peerId = PREFIX + pin; makePC();
   setupChannel(pc.createDataChannel('files', {ordered:true}));
   await pc.setLocalDescription(await pc.createOffer());
-  signal('OFFER', {sdp:pc.localDescription});
-  setTimeout(()=>{ if (!dc || dc.readyState !== 'open') fail('No answer from that PIN. Check the number and that the other page is still open.'); }, 20000);
+  signal('OFFER', {sdp:pc.localDescription}); step('asked PIN ' + pin);
+  joinTimer = setTimeout(()=>{
+    if (paired || role !== 'join') return;
+    fail(D.steps.includes('other device answered')
+      ? "Found the other device but couldn't connect directly. Your networks may block device-to-device links — try both on the same Wi-Fi, or one on a phone hotspot."
+      : 'No answer from that PIN. Check the number and that the other page is still open.');
+  }, 30000);
 };
 
 // ---------- data channel ----------
