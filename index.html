@@ -67,6 +67,16 @@ li.done .bar i{background:var(--teal)}
 .peer{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px 18px;margin-bottom:18px}
 .peer b{font-size:16px}
 input[type=file]{display:none}
+.pick{display:flex;align-items:center;gap:12px;border:2px dashed var(--ink);border-radius:6px;padding:14px;margin-bottom:14px;cursor:pointer;background:var(--bg);transition:background .15s}
+.pick.over{background:var(--pink)}
+.chosen{list-style:none;margin-bottom:14px}
+.chosen:empty{display:none}
+.chosen li{display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid #ddd;font-size:15px}
+.chosen .nm{flex:1;min-width:0}
+.chosen button{flex:none;border:var(--b);background:var(--white);border-radius:4px;width:30px;height:30px;font:inherit;font-weight:800;cursor:pointer}
+.note{padding:12px 16px;margin-bottom:18px;background:var(--yellow);font-weight:600;font-size:14px}
+.drop.off{opacity:.45;pointer-events:none}
+li.bad .bar i{background:var(--red)}
 footer{margin-top:40px;font-size:13px;color:var(--muted);text-align:center}
 </style></head><body><div class="wrap">
 
@@ -78,17 +88,22 @@ footer{margin-top:40px;font-size:13px;color:var(--muted);text-align:center}
 <!-- 1. Start -->
 <section id="vStart">
   <h1>Pair two devices, <span>send anything.</span></h1>
-  <p class="sub">Make a PIN on one device, type it on the other. Files go straight between them.</p>
+  <p class="sub">Choose your files and make a PIN on one device, type the PIN on the other. Files send as soon as they pair.</p>
   <div class="grid">
     <div class="card pad">
-      <h3>Make a PIN</h3>
-      <p>Do this on the first device.</p>
+      <h3>Send</h3>
+      <p>On this device: choose files, then create a PIN.</p>
+      <label class="pick" id="drop0">
+        <span class="btn w sm">Choose files</span><span class="dt" style="margin:0" id="pickHint">or drop them here</span>
+        <input type="file" id="picker0" multiple>
+      </label>
+      <ul class="chosen" id="chosen"></ul>
       <button class="btn full" id="bHost">Create PIN</button>
     </div>
     <div class="or">— OR —</div>
     <div class="card pad">
-      <h3>Enter a PIN</h3>
-      <p>Do this on the second device.</p>
+      <h3>Receive</h3>
+      <p>On the other device: enter the PIN.</p>
       <div class="join">
         <input id="iPin" inputmode="numeric" maxlength="6" placeholder="000000" autocomplete="off">
         <button class="btn y" id="bJoin">Join</button>
@@ -105,6 +120,7 @@ footer{margin-top:40px;font-size:13px;color:var(--muted);text-align:center}
   <div class="card pad center">
     <div class="pin" id="pinBox"></div>
     <div class="msg dots" id="mWait">Waiting for the other device</div>
+    <div class="dt" id="waitFiles"></div>
     <br><button class="btn w sm" onclick="location.reload()">Cancel</button>
   </div>
 </section>
@@ -112,9 +128,10 @@ footer{margin-top:40px;font-size:13px;color:var(--muted);text-align:center}
 <!-- 3. Paired -->
 <section id="vPaired" class="hide">
   <div class="card peer">
-    <div><b>Paired ✓</b><div class="dt" style="margin:0">Keep both pages open while sending</div></div>
-    <button class="btn w sm" onclick="location.reload()">Disconnect</button>
+    <div><b id="peerTitle">Paired ✓</b><div class="dt" style="margin:0">Keep both pages open while sending</div></div>
+    <button class="btn w sm" onclick="paired=false;location.reload()">Disconnect</button>
   </div>
+  <div class="card note hide" id="gone"></div>
   <label class="card drop" id="drop">
     <div class="big">Drop files to send</div>
     <div class="small">or tap to choose — any type, any size</div>
@@ -193,9 +210,9 @@ async function onSignal(m){
 }
 
 function fail(text){
+  if (paired) return lost(text);
   status('Not paired','bad');
-  if (!$('vPaired').classList.contains('hide')) { err($('mStart'), text); show('vStart'); }
-  else if (role === 'host') err($('mWait'), text);
+  if (role === 'host') err($('mWait'), text);
   else { err($('mStart'), text); $('bJoin').disabled = false; $('bHost').disabled = false; }
   closeSignal(); try{ pc && pc.close(); }catch{} pc = null;
 }
@@ -209,7 +226,9 @@ $('bHost').onclick = async () => {
     try {
       await openSignal(PREFIX + pin);
       $('pinBox').innerHTML = [...pin].map(d=>`<span>${d}</span>`).join('');
-      show('vWait'); status('Waiting','wait');
+      const n = pending.length;
+      $('waitFiles').textContent = n ? `${n} file${n>1?'s':''} will send automatically once paired.` : '';
+      show('vWait'); status('Waiting','wait'); keepAwake();
       return;
     } catch(e){ closeSignal(); if (e !== 'taken') break; }
   }
@@ -238,8 +257,11 @@ $('bJoin').onclick = async () => {
 // ---------- data channel ----------
 function setupChannel(ch){
   dc = ch; dc.binaryType = 'arraybuffer'; dc.bufferedAmountLowThreshold = BLOCK;
-  dc.onopen = () => { closeSignal(); show('vPaired'); status('Paired','on'); };
-  dc.onclose = () => { if (role) fail('The other device disconnected. Make a new PIN to pair again.'); };
+  dc.onopen = () => {
+    closeSignal(); paired = true; show('vPaired'); status('Paired','on'); keepAwake();
+    if (pending.length){ sendFiles(pending); pending = []; renderChosen(); }
+  };
+  dc.onclose = () => { if (paired || role) fail('The other device disconnected.'); };
   dc.onmessage = onData;
 }
 
@@ -255,26 +277,27 @@ function addRow(dir, name, bytes){
   let last = 0;
   return {
     progress(f){ const now = performance.now(); if (now-last > 80 || f>=1){ last = now; li.querySelector('.bar i').style.width = (f*100).toFixed(1)+'%'; } },
+    stop(text){ li.classList.add('bad'); li.querySelector('.dt').textContent = text + ' · ' + size(bytes); },
     done(text, blob){
       li.classList.add('done'); li.querySelector('.bar i').style.width = '100%';
       li.querySelector('.dt').textContent = text + ' · ' + size(bytes);
       if (blob){
         const a = document.createElement('a'); a.className = 'btn sm'; a.textContent = 'Save';
-        a.href = URL.createObjectURL(blob); a.download = name; li.appendChild(a);
+        a.href = URL.createObjectURL(blob); a.download = name; a.target = '_blank'; a.rel = 'noopener'; li.appendChild(a);
       }
     }
   };
 }
 
 // ---------- sending ----------
-const queue = []; let busy = false;
+const queue = []; let busy = false, current = null;
 function sendFiles(files){ for (const f of files) queue.push({f, row:addRow('out', f.name, f.size)}); pump(); }
 const drained = () => new Promise(r => { dc.onbufferedamountlow = () => { dc.onbufferedamountlow = null; r(); }; });
 async function pump(){
   if (busy) return; busy = true;
   try {
     while (queue.length){
-      const {f, row} = queue.shift();
+      const {f, row} = current = queue.shift();
       dc.send(JSON.stringify({t:'meta', name:f.name, size:f.size, mime:f.type}));
       for (let off = 0; off < f.size; ){
         const block = new Uint8Array(await f.slice(off, off + BLOCK).arrayBuffer());
@@ -287,8 +310,8 @@ async function pump(){
       dc.send(JSON.stringify({t:'end'}));
       row.done('Sent');
     }
-  } catch(e){ fail('Sending stopped — the connection was lost.'); }
-  busy = false;
+  } catch(e){ busy = false; fail('Sending stopped — the connection was lost.'); }
+  busy = false; current = null;
 }
 
 // ---------- receiving ----------
@@ -304,6 +327,46 @@ function onData(e){
     inc.parts.push(e.data); inc.got += e.data.byteLength; inc.row.progress(inc.got / inc.size);
   }
 }
+
+// ---------- files chosen before pairing ----------
+let pending = [];
+function renderChosen(){
+  const ul = $('chosen'); ul.innerHTML = '';
+  pending.forEach((f, i) => {
+    const li = document.createElement('li');
+    li.innerHTML = '<span class="nm"></span><span class="dt" style="margin:0"></span><button aria-label="Remove">×</button>';
+    li.querySelector('.nm').textContent = f.name; li.querySelector('.dt').textContent = size(f.size);
+    li.querySelector('button').onclick = () => { pending.splice(i, 1); renderChosen(); };
+    ul.appendChild(li);
+  });
+  const n = pending.length;
+  $('bHost').textContent = n ? `Create PIN · send ${n} file${n>1?'s':''}` : 'Create PIN';
+  $('pickHint').textContent = n ? 'add more' : 'or drop them here';
+}
+const drop0 = $('drop0'), picker0 = $('picker0');
+['dragenter','dragover'].forEach(ev => drop0.addEventListener(ev, e => { e.preventDefault(); drop0.classList.add('over'); }));
+['dragleave','drop'].forEach(ev => drop0.addEventListener(ev, e => { e.preventDefault(); drop0.classList.remove('over'); }));
+drop0.addEventListener('drop', e => { pending.push(...e.dataTransfer.files); renderChosen(); });
+picker0.addEventListener('change', () => { pending.push(...picker0.files); picker0.value = ''; renderChosen(); });
+
+// ---------- connection lost after pairing: keep received files ----------
+let paired = false;
+function lost(text){
+  paired = false; role = null; queue.length = 0;
+  if (current){ current.row.stop('Not sent'); current = null; }
+  if (inc){ inc.row.stop('Interrupted'); inc = null; }
+  status('Disconnected','bad'); $('peerTitle').textContent = 'Disconnected';
+  $('gone').textContent = text + ' Anything already received can still be saved below. Tap Disconnect to pair again.';
+  $('gone').classList.remove('hide'); $('drop').classList.add('off');
+  closeSignal(); try{ pc && pc.close(); }catch{} pc = null; releaseAwake();
+}
+
+// ---------- keep the screen on (phones drop the connection when they sleep) ----------
+let lock = null;
+async function keepAwake(){ try{ if ('wakeLock' in navigator && document.visibilityState === 'visible') lock = await navigator.wakeLock.request('screen'); }catch{} }
+function releaseAwake(){ try{ lock && lock.release(); }catch{} lock = null; }
+document.addEventListener('visibilitychange', () => { if ((paired || role) && document.visibilityState === 'visible') keepAwake(); });
+addEventListener('beforeunload', e => { if (paired){ e.preventDefault(); e.returnValue = ''; } });
 
 // ---------- drop zone ----------
 const drop = $('drop'), picker = $('picker');
