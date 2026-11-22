@@ -1,0 +1,377 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
+<title>Pair2 — device to device</title>
+<style>
+:root{--bg:#f4f4f0;--ink:#000;--pink:#ff90e8;--yellow:#ffc900;--teal:#23a094;--red:#ff5a5a;--white:#fff;--muted:#5c5c5c;
+  --b:2px solid var(--ink);--sh:4px 4px 0 var(--ink)}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--ink);font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  line-height:1.4;padding:24px 16px 64px;-webkit-tap-highlight-color:transparent}
+.wrap{max-width:640px;margin:0 auto}
+header{display:flex;align-items:center;justify-content:space-between;margin-bottom:32px}
+.logo{font-weight:800;font-size:22px;letter-spacing:-.5px;display:flex;align-items:center;gap:10px}
+.logo i{width:28px;height:28px;border:var(--b);border-radius:50%;background:var(--pink)}
+.pill{border:var(--b);border-radius:999px;padding:4px 12px;font-size:13px;font-weight:700;background:var(--white);display:flex;align-items:center;gap:6px}
+.pill b{width:9px;height:9px;border-radius:50%;border:1px solid var(--ink);background:#bbb}
+.pill.wait b{background:var(--yellow)}.pill.on b{background:var(--teal)}.pill.bad b{background:var(--red)}
+h1{font-size:clamp(36px,9vw,56px);line-height:1;letter-spacing:-1.5px;font-weight:800;margin-bottom:12px}
+h1 span{background:var(--yellow);padding:0 8px;border:var(--b);display:inline-block;transform:rotate(-1.5deg)}
+.sub{color:var(--muted);font-size:17px;margin-bottom:28px}
+.card{background:var(--white);border:var(--b);border-radius:6px;box-shadow:var(--sh)}
+.pad{padding:22px}
+.grid{display:grid;gap:18px}
+.card h3{font-size:19px;margin-bottom:4px}
+.card p{color:var(--muted);font-size:15px;margin-bottom:16px}
+.btn{display:inline-flex;align-items:center;justify-content:center;border:var(--b);border-radius:4px;background:var(--pink);color:var(--ink);
+  font:inherit;font-weight:700;padding:11px 18px;cursor:pointer;text-decoration:none;box-shadow:3px 3px 0 var(--ink);
+  transition:transform .08s,box-shadow .08s}
+.btn:hover{transform:translate(-1px,-1px);box-shadow:4px 4px 0 var(--ink)}
+.btn:active{transform:translate(3px,3px);box-shadow:0 0 0 var(--ink)}
+.btn:disabled{opacity:.5;pointer-events:none}
+.btn.y{background:var(--yellow)}.btn.w{background:var(--white)}.btn.sm{padding:6px 12px;font-size:14px}
+.btn.full{width:100%}
+.join{display:flex;gap:10px}
+.join input{flex:1;min-width:0;border:var(--b);border-radius:4px;font:inherit;font-size:22px;font-weight:800;letter-spacing:6px;
+  padding:8px 12px;text-align:center;background:var(--bg);outline:none}
+.join input:focus{background:var(--white);box-shadow:3px 3px 0 var(--ink)}
+.or{text-align:center;font-weight:800;font-size:13px;letter-spacing:2px;color:var(--muted)}
+.pin{display:flex;gap:8px;justify-content:center;margin:18px 0}
+.pin span{width:clamp(40px,12vw,60px);height:clamp(54px,15vw,76px);border:var(--b);border-radius:6px;background:var(--yellow);
+  display:grid;place-items:center;font-size:clamp(26px,8vw,40px);font-weight:800;box-shadow:3px 3px 0 var(--ink)}
+.center{text-align:center}
+.msg{margin-top:14px;font-weight:600;font-size:14px;min-height:20px}
+.msg.err{color:#c4161c}
+.dots::after{content:'';animation:d 1.2s steps(4) infinite}
+@keyframes d{0%{content:''}25%{content:'.'}50%{content:'..'}75%{content:'...'}}
+.drop{padding:36px 20px;text-align:center;cursor:pointer;display:block;transition:transform .08s,box-shadow .08s,background .15s}
+.drop:hover,.drop.over{transform:translate(-2px,-2px);box-shadow:6px 6px 0 var(--ink)}
+.drop.over{background:var(--pink)}
+.drop .big{font-size:20px;font-weight:800;margin-bottom:4px}
+.drop .small{color:var(--muted);font-size:14px;margin-bottom:16px}
+.section{display:flex;align-items:baseline;justify-content:space-between;margin:36px 0 14px}
+.section h2{font-size:22px;letter-spacing:-.5px}
+.list{list-style:none;overflow:hidden}
+.list li{display:flex;align-items:center;gap:14px;padding:14px 16px;border-bottom:var(--b)}
+.list li:last-child{border-bottom:0}
+.ic{flex:none;width:44px;height:44px;border:var(--b);border-radius:4px;display:grid;place-items:center;font-size:18px;font-weight:800}
+.ic.in{background:var(--pink)}.ic.out{background:var(--yellow)}
+.meta{flex:1;min-width:0}
+.nm{font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dt{font-size:13px;color:var(--muted);margin-bottom:6px}
+.bar{height:10px;border:var(--b);border-radius:999px;overflow:hidden;background:var(--bg)}
+.bar i{display:block;height:100%;width:0;background:var(--yellow);border-right:2px solid var(--ink)}
+li.done .bar i{background:var(--teal)}
+.empty{padding:30px 16px;text-align:center;color:var(--muted);justify-content:center}
+.hide{display:none!important}
+.peer{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px 18px;margin-bottom:18px}
+.peer b{font-size:16px}
+input[type=file]{display:none}
+.pick{display:flex;align-items:center;gap:12px;border:2px dashed var(--ink);border-radius:6px;padding:14px;margin-bottom:14px;cursor:pointer;background:var(--bg);transition:background .15s}
+.pick.over{background:var(--pink)}
+.chosen{list-style:none;margin-bottom:14px}
+.chosen:empty{display:none}
+.chosen li{display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid #ddd;font-size:15px}
+.chosen .nm{flex:1;min-width:0}
+.chosen button{flex:none;border:var(--b);background:var(--white);border-radius:4px;width:30px;height:30px;font:inherit;font-weight:800;cursor:pointer}
+.note{padding:12px 16px;margin-bottom:18px;background:var(--yellow);font-weight:600;font-size:14px}
+.drop.off{opacity:.45;pointer-events:none}
+li.bad .bar i{background:var(--red)}
+footer{margin-top:40px;font-size:13px;color:var(--muted);text-align:center}
+</style></head><body><div class="wrap">
+
+<header>
+  <div class="logo"><i></i>Pair2</div>
+  <div class="pill" id="pill"><b></b><span id="pillText">Not paired</span></div>
+</header>
+
+<!-- 1. Start -->
+<section id="vStart">
+  <h1>Pair two devices, <span>send anything.</span></h1>
+  <p class="sub">Choose your files and make a PIN on one device, type the PIN on the other. Files send as soon as they pair.</p>
+  <div class="grid">
+    <div class="card pad">
+      <h3>Send</h3>
+      <p>On this device: choose files, then create a PIN.</p>
+      <label class="pick" id="drop0">
+        <span class="btn w sm">Choose files</span><span class="dt" style="margin:0" id="pickHint">or drop them here</span>
+        <input type="file" id="picker0" multiple>
+      </label>
+      <ul class="chosen" id="chosen"></ul>
+      <button class="btn full" id="bHost">Create PIN</button>
+    </div>
+    <div class="or">— OR —</div>
+    <div class="card pad">
+      <h3>Receive</h3>
+      <p>On the other device: enter the PIN.</p>
+      <div class="join">
+        <input id="iPin" inputmode="numeric" maxlength="6" placeholder="000000" autocomplete="off">
+        <button class="btn y" id="bJoin">Join</button>
+      </div>
+    </div>
+  </div>
+  <div class="msg center" id="mStart"></div>
+</section>
+
+<!-- 2. Showing PIN -->
+<section id="vWait" class="hide">
+  <h1>Your PIN</h1>
+  <p class="sub">Type this on the other device. Keep this page open.</p>
+  <div class="card pad center">
+    <div class="pin" id="pinBox"></div>
+    <div class="msg dots" id="mWait">Waiting for the other device</div>
+    <div class="dt" id="waitFiles"></div>
+    <br><button class="btn w sm" onclick="location.reload()">Cancel</button>
+  </div>
+</section>
+
+<!-- 3. Paired -->
+<section id="vPaired" class="hide">
+  <div class="card peer">
+    <div><b id="peerTitle">Paired ✓</b><div class="dt" style="margin:0">Keep both pages open while sending</div></div>
+    <button class="btn w sm" onclick="paired=false;location.reload()">Disconnect</button>
+  </div>
+  <div class="card note hide" id="gone"></div>
+  <label class="card drop" id="drop">
+    <div class="big">Drop files to send</div>
+    <div class="small">or tap to choose — any type, any size</div>
+    <span class="btn">Choose files</span>
+    <input type="file" id="picker" multiple>
+  </label>
+  <div class="section"><h2>Transfers</h2><span class="dt" id="count">0</span></div>
+  <ul class="card list" id="list"><li class="empty">Nothing yet. Send a file, or wait for one.</li></ul>
+</section>
+
+<footer>The PIN step uses the internet for a moment. Files go device to device.</footer>
+</div>
+
+<script>
+// ---------- settings ----------
+const SIGNAL = window.DROP_SIGNAL || 'wss://0.peerjs.com/peerjs';   // free public matchmaking server
+const PREFIX = 'kdrop-v1-';                                          // keeps our PINs apart from other apps
+const ICE = {iceServers:[{urls:'stun:stun.l.google.com:19302'},{urls:'stun:stun1.l.google.com:19302'}]};
+const CHUNK = 16 * 1024, BLOCK = 1024 * 1024, HIGH = 4 * 1024 * 1024;
+
+// ---------- helpers ----------
+const $ = id => document.getElementById(id);
+function show(v){['vStart','vWait','vPaired'].forEach(x=>$(x).classList.toggle('hide',x!==v))}
+function status(text, cls){$('pill').className='pill '+(cls||'');$('pillText').textContent=text}
+function err(el,t){el.classList.remove('dots');el.classList.add('err');el.textContent=t}
+function size(n){return n<1024?n+' B':n<1048576?(n/1024).toFixed(1)+' KB':n<1073741824?(n/1048576).toFixed(1)+' MB':(n/1073741824).toFixed(2)+' GB'}
+const rand = n => Array.from(crypto.getRandomValues(new Uint8Array(n)),b=>(b%36).toString(36)).join('');
+
+// ---------- matchmaking (PeerJS server protocol) ----------
+let ws, pc, dc, peerId, beat, pendingIce = [], role;
+
+function openSignal(id){
+  return new Promise((resolve, reject)=>{
+    try { ws = new WebSocket(`${SIGNAL}?key=peerjs&id=${id}&token=${rand(10)}&version=1.5.4`); }
+    catch(e){ return reject('net'); }
+    const t = setTimeout(()=>reject('net'), 12000);
+    ws.onmessage = e => {
+      let m; try { m = JSON.parse(e.data); } catch { return; }
+      if (m.type === 'OPEN'){ clearTimeout(t); beat = setInterval(()=>ws.readyState===1 && ws.send('{"type":"HEARTBEAT"}'), 5000); resolve(); }
+      else if (m.type === 'ID-TAKEN'){ clearTimeout(t); reject('taken'); }
+      else if (m.type === 'ERROR' || m.type === 'INVALID-KEY'){ clearTimeout(t); reject('net'); }
+      else onSignal(m);
+    };
+    ws.onerror = () => { clearTimeout(t); reject('net'); };
+  });
+}
+function signal(type, payload){ if (ws && ws.readyState === 1) ws.send(JSON.stringify({type, dst:peerId, payload})); }
+function closeSignal(){ clearInterval(beat); try{ ws && ws.close(); }catch{} ws = null; }
+
+function makePC(){
+  pc = new RTCPeerConnection(ICE);
+  pc.onicecandidate = e => e.candidate && signal('CANDIDATE', {candidate:e.candidate});
+  pc.onconnectionstatechange = () => {
+    if (pc.connectionState === 'failed') fail("Couldn't connect directly. Your router may block devices from talking to each other — try a phone hotspot.");
+  };
+}
+async function addIce(c){ if (pc && pc.remoteDescription) { try{ await pc.addIceCandidate(c); }catch{} } else pendingIce.push(c); }
+async function flushIce(){ for (const c of pendingIce.splice(0)) { try{ await pc.addIceCandidate(c); }catch{} } }
+
+async function onSignal(m){
+  const p = m.payload || {};
+  if (m.type === 'OFFER' && role === 'host' && !pc){
+    peerId = m.src; makePC();
+    pc.ondatachannel = e => setupChannel(e.channel);
+    await pc.setRemoteDescription(p.sdp); await flushIce();
+    await pc.setLocalDescription(await pc.createAnswer());
+    signal('ANSWER', {sdp:pc.localDescription});
+    $('mWait').textContent = 'Device found, connecting';
+  } else if (m.type === 'ANSWER' && pc){
+    await pc.setRemoteDescription(p.sdp); await flushIce();
+  } else if (m.type === 'CANDIDATE' && m.src === peerId){
+    addIce(p.candidate);
+  } else if (m.type === 'EXPIRE' && role === 'join'){
+    fail('No device found with that PIN. Check the number and that the other page is still open.');
+  }
+}
+
+function fail(text){
+  if (paired) return lost(text);
+  status('Not paired','bad');
+  if (role === 'host') err($('mWait'), text);
+  else { err($('mStart'), text); $('bJoin').disabled = false; $('bHost').disabled = false; }
+  closeSignal(); try{ pc && pc.close(); }catch{} pc = null;
+}
+
+// Device 1: create a PIN and wait
+$('bHost').onclick = async () => {
+  role = 'host'; $('bHost').disabled = true; $('mStart').className='msg center dots'; $('mStart').textContent = 'Getting a PIN';
+  status('Connecting','wait');
+  for (let tries = 0; tries < 5; tries++){
+    const pin = String(Math.floor(100000 + Math.random()*900000));
+    try {
+      await openSignal(PREFIX + pin);
+      $('pinBox').innerHTML = [...pin].map(d=>`<span>${d}</span>`).join('');
+      const n = pending.length;
+      $('waitFiles').textContent = n ? `${n} file${n>1?'s':''} will send automatically once paired.` : '';
+      show('vWait'); status('Waiting','wait'); keepAwake();
+      return;
+    } catch(e){ closeSignal(); if (e !== 'taken') break; }
+  }
+  role = null; $('bHost').disabled = false; status('Offline','bad');
+  err($('mStart'), 'Could not reach the internet to make a PIN. Connect to the internet and try again.');
+};
+
+// Device 2: join with a PIN
+$('iPin').oninput = e => { e.target.value = e.target.value.replace(/\D/g,'').slice(0,6); };
+$('iPin').onkeydown = e => { if (e.key === 'Enter') $('bJoin').click(); };
+$('bJoin').onclick = async () => {
+  const pin = $('iPin').value;
+  if (pin.length !== 6) { err($('mStart'),'Enter the 6-digit PIN.'); return; }
+  role = 'join'; $('bJoin').disabled = true; $('bHost').disabled = true;
+  $('mStart').className='msg center dots'; $('mStart').textContent='Connecting'; status('Connecting','wait');
+  try { await openSignal(PREFIX + 'j' + rand(12)); }
+  catch { role = null; $('bJoin').disabled = false; $('bHost').disabled = false; status('Offline','bad');
+          err($('mStart'),'Could not reach the internet to check the PIN. Connect and try again.'); return; }
+  peerId = PREFIX + pin; makePC();
+  setupChannel(pc.createDataChannel('files', {ordered:true}));
+  await pc.setLocalDescription(await pc.createOffer());
+  signal('OFFER', {sdp:pc.localDescription});
+  setTimeout(()=>{ if (!dc || dc.readyState !== 'open') fail('No answer from that PIN. Check the number and that the other page is still open.'); }, 20000);
+};
+
+// ---------- data channel ----------
+function setupChannel(ch){
+  dc = ch; dc.binaryType = 'arraybuffer'; dc.bufferedAmountLowThreshold = BLOCK;
+  dc.onopen = () => {
+    closeSignal(); paired = true; show('vPaired'); status('Paired','on'); keepAwake();
+    if (pending.length){ sendFiles(pending); pending = []; renderChosen(); }
+  };
+  dc.onclose = () => { if (paired || role) fail('The other device disconnected.'); };
+  dc.onmessage = onData;
+}
+
+// ---------- transfer list ----------
+let rows = 0;
+function addRow(dir, name, bytes){
+  const list = $('list'); const empty = list.querySelector('.empty'); if (empty) empty.remove();
+  const li = document.createElement('li');
+  li.innerHTML = `<div class="ic ${dir}">${dir==='in'?'↓':'↑'}</div><div class="meta"><div class="nm"></div><div class="dt"></div><div class="bar"><i></i></div></div>`;
+  li.querySelector('.nm').textContent = name;
+  li.querySelector('.dt').textContent = (dir==='in'?'Receiving · ':'Sending · ') + size(bytes);
+  list.prepend(li); $('count').textContent = (++rows) + (rows===1?' transfer':' transfers');
+  let last = 0;
+  return {
+    progress(f){ const now = performance.now(); if (now-last > 80 || f>=1){ last = now; li.querySelector('.bar i').style.width = (f*100).toFixed(1)+'%'; } },
+    stop(text){ li.classList.add('bad'); li.querySelector('.dt').textContent = text + ' · ' + size(bytes); },
+    done(text, blob){
+      li.classList.add('done'); li.querySelector('.bar i').style.width = '100%';
+      li.querySelector('.dt').textContent = text + ' · ' + size(bytes);
+      if (blob){
+        const a = document.createElement('a'); a.className = 'btn sm'; a.textContent = 'Save';
+        a.href = URL.createObjectURL(blob); a.download = name; a.target = '_blank'; a.rel = 'noopener'; li.appendChild(a);
+      }
+    }
+  };
+}
+
+// ---------- sending ----------
+const queue = []; let busy = false, current = null;
+function sendFiles(files){ for (const f of files) queue.push({f, row:addRow('out', f.name, f.size)}); pump(); }
+const drained = () => new Promise(r => { dc.onbufferedamountlow = () => { dc.onbufferedamountlow = null; r(); }; });
+async function pump(){
+  if (busy) return; busy = true;
+  try {
+    while (queue.length){
+      const {f, row} = current = queue.shift();
+      dc.send(JSON.stringify({t:'meta', name:f.name, size:f.size, mime:f.type}));
+      for (let off = 0; off < f.size; ){
+        const block = new Uint8Array(await f.slice(off, off + BLOCK).arrayBuffer());
+        for (let i = 0; i < block.length; i += CHUNK){
+          if (dc.bufferedAmount > HIGH) await drained();
+          dc.send(block.subarray(i, i + CHUNK));
+        }
+        off += block.length; row.progress(off / f.size);
+      }
+      dc.send(JSON.stringify({t:'end'}));
+      row.done('Sent');
+    }
+  } catch(e){ busy = false; fail('Sending stopped — the connection was lost.'); }
+  busy = false; current = null;
+}
+
+// ---------- receiving ----------
+let inc = null;
+function onData(e){
+  if (typeof e.data === 'string'){
+    const m = JSON.parse(e.data);
+    if (m.t === 'meta'){ inc = {...m, parts:[], got:0, row:addRow('in', m.name, m.size)}; if (!m.size) inc.row.progress(1); }
+    else if (m.t === 'end' && inc){
+      inc.row.done('Received', new Blob(inc.parts, {type: inc.mime || 'application/octet-stream'})); inc = null;
+    }
+  } else if (inc){
+    inc.parts.push(e.data); inc.got += e.data.byteLength; inc.row.progress(inc.got / inc.size);
+  }
+}
+
+// ---------- files chosen before pairing ----------
+let pending = [];
+function renderChosen(){
+  const ul = $('chosen'); ul.innerHTML = '';
+  pending.forEach((f, i) => {
+    const li = document.createElement('li');
+    li.innerHTML = '<span class="nm"></span><span class="dt" style="margin:0"></span><button aria-label="Remove">×</button>';
+    li.querySelector('.nm').textContent = f.name; li.querySelector('.dt').textContent = size(f.size);
+    li.querySelector('button').onclick = () => { pending.splice(i, 1); renderChosen(); };
+    ul.appendChild(li);
+  });
+  const n = pending.length;
+  $('bHost').textContent = n ? `Create PIN · send ${n} file${n>1?'s':''}` : 'Create PIN';
+  $('pickHint').textContent = n ? 'add more' : 'or drop them here';
+}
+const drop0 = $('drop0'), picker0 = $('picker0');
+['dragenter','dragover'].forEach(ev => drop0.addEventListener(ev, e => { e.preventDefault(); drop0.classList.add('over'); }));
+['dragleave','drop'].forEach(ev => drop0.addEventListener(ev, e => { e.preventDefault(); drop0.classList.remove('over'); }));
+drop0.addEventListener('drop', e => { pending.push(...e.dataTransfer.files); renderChosen(); });
+picker0.addEventListener('change', () => { pending.push(...picker0.files); picker0.value = ''; renderChosen(); });
+
+// ---------- connection lost after pairing: keep received files ----------
+let paired = false;
+function lost(text){
+  paired = false; role = null; queue.length = 0;
+  if (current){ current.row.stop('Not sent'); current = null; }
+  if (inc){ inc.row.stop('Interrupted'); inc = null; }
+  status('Disconnected','bad'); $('peerTitle').textContent = 'Disconnected';
+  $('gone').textContent = text + ' Anything already received can still be saved below. Tap Disconnect to pair again.';
+  $('gone').classList.remove('hide'); $('drop').classList.add('off');
+  closeSignal(); try{ pc && pc.close(); }catch{} pc = null; releaseAwake();
+}
+
+// ---------- keep the screen on (phones drop the connection when they sleep) ----------
+let lock = null;
+async function keepAwake(){ try{ if ('wakeLock' in navigator && document.visibilityState === 'visible') lock = await navigator.wakeLock.request('screen'); }catch{} }
+function releaseAwake(){ try{ lock && lock.release(); }catch{} lock = null; }
+document.addEventListener('visibilitychange', () => { if ((paired || role) && document.visibilityState === 'visible') keepAwake(); });
+addEventListener('beforeunload', e => { if (paired){ e.preventDefault(); e.returnValue = ''; } });
+
+// ---------- drop zone ----------
+const drop = $('drop'), picker = $('picker');
+['dragenter','dragover'].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.add('over'); }));
+['dragleave','drop'].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.remove('over'); }));
+drop.addEventListener('drop', e => sendFiles([...e.dataTransfer.files]));
+picker.addEventListener('change', () => { sendFiles([...picker.files]); picker.value = ''; });
+</script></body></html>
