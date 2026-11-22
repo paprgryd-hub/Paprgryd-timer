@@ -131,7 +131,7 @@ footer{margin-top:40px;font-size:13px;color:var(--muted);text-align:center}
 <!-- 3. Paired -->
 <section id="vPaired" class="hide">
   <div class="card peer">
-    <div><b id="peerTitle">Paired ✓</b><div class="dt" style="margin:0">Keep both pages open while sending</div></div>
+    <div><b id="peerTitle">Paired ✓</b><div class="dt" style="margin:0">Keep both pages open while sending<span id="via"></span></div></div>
     <button class="btn w sm" onclick="paired=false;location.reload()">Disconnect</button>
   </div>
   <div class="card note hide" id="gone"></div>
@@ -152,7 +152,21 @@ footer{margin-top:40px;font-size:13px;color:var(--muted);text-align:center}
 // ---------- settings ----------
 const SIGNAL = window.DROP_SIGNAL || 'wss://0.peerjs.com/peerjs';   // free public matchmaking server
 const PREFIX = 'kdrop-v1-';                                          // keeps our PINs apart from other apps
-const ICE = {iceServers:[{urls:'stun:stun.l.google.com:19302'},{urls:'stun:stun1.l.google.com:19302'}]};
+const STUN = [{urls:'stun:stun.l.google.com:19302'},{urls:'stun:stun1.l.google.com:19302'}];
+
+// TURN relay: the fallback route when two networks won't let devices connect directly
+// (mobile data, office/school Wi-Fi, strict routers). Files stay end-to-end encrypted.
+// Paste your Metered.ca "TURN credentials" API link between the quotes, e.g.
+//   'https://YOURAPP.metered.live/api/v1/turn/credentials?apiKey=YOUR_KEY'
+const TURN_URL = window.DROP_TURN_URL || '';
+let ICE_SERVERS = STUN, relay = TURN_URL ? 'loading' : 'not set up';
+const iceReady = (async () => {
+  if (!TURN_URL) return;
+  try {
+    const r = await fetch(TURN_URL); const list = r.ok ? await r.json() : null;
+    if (Array.isArray(list) && list.length){ ICE_SERVERS = STUN.concat(list); relay = 'ready'; } else relay = 'unavailable';
+  } catch { relay = 'unavailable'; }
+})();
 const CHUNK = 16 * 1024, BLOCK = 1024 * 1024, HIGH = 4 * 1024 * 1024;
 
 // ---------- helpers ----------
@@ -169,7 +183,7 @@ function step(t){ D.steps.push(t); diag(); }
 function ctype(c){ const m = / typ (\w+)/.exec((c && c.candidate) || ''); return m ? m[1] : null; }
 function diag(){
   const parts = [...D.steps];
-  if (D.ice) parts.push('direct link: ' + D.ice);
+  if (D.ice) parts.push('link: ' + D.ice);
   if (D.mine.size || D.theirs.size) parts.push('routes here: ' + ([...D.mine].join('+') || 'none') + ', there: ' + ([...D.theirs].join('+') || 'none'));
   const t = parts.join(' → '); $('dStart').textContent = t; $('dWait').textContent = t;
 }
@@ -214,7 +228,7 @@ document.addEventListener('visibilitychange', () => {
 });
 
 function makePC(){
-  pc = new RTCPeerConnection(ICE);
+  pc = new RTCPeerConnection({iceServers: ICE_SERVERS, iceTransportPolicy: window.DROP_FORCE_RELAY ? 'relay' : 'all'});
   pc.onicecandidate = e => { if (e.candidate){ const t = ctype(e.candidate); if (t) D.mine.add(t); diag(); signal('CANDIDATE', {candidate:e.candidate}); } };
   pc.oniceconnectionstatechange = () => { if (pc){ D.ice = pc.iceConnectionState; diag(); } };
   pc.onconnectionstatechange = () => {
@@ -251,6 +265,7 @@ async function onSignal(m){
 
 function fail(text){
   if (paired) return lost(text);
+  if (/couldn't connect directly/.test(text) && relay !== 'ready') text += relay === 'not set up' ? ' (No TURN relay is set up on this page.)' : ' (The TURN relay could not be reached.)';
   if (!role) return;                       // already failed once — keep the first, real reason
   const was = role; role = null; clearTimeout(joinTimer); clearInterval(offerTimer);
   status('Not paired','bad');
@@ -267,7 +282,7 @@ $('bHost').onclick = async () => {
   for (let tries = 0; tries < 5; tries++){
     const pin = String(Math.floor(100000 + Math.random()*900000));
     try {
-      await openSignal(PREFIX + pin); hostId = PREFIX + pin; D.steps = []; step('PIN server ok');
+      await iceReady; await openSignal(PREFIX + pin); hostId = PREFIX + pin; D.steps = []; step('PIN server ok'); step('relay ' + relay);
       $('pinBox').innerHTML = [...pin].map(d=>`<span>${d}</span>`).join('');
       const n = pending.length;
       $('waitFiles').textContent = n ? `${n} file${n>1?'s':''} will send automatically once paired.` : '';
@@ -288,7 +303,7 @@ $('bJoin').onclick = async () => {
   role = 'join'; $('bJoin').disabled = true; $('bHost').disabled = true;
   $('mStart').className='msg center dots'; $('mStart').textContent='Connecting'; status('Connecting','wait');
   D.steps = []; D.ice = ''; D.mine.clear(); D.theirs.clear(); diag();
-  try { await openSignal(PREFIX + 'j' + rand(12)); step('PIN server ok'); }
+  try { await iceReady; await openSignal(PREFIX + 'j' + rand(12)); step('PIN server ok'); step('relay ' + relay); }
   catch { role = null; $('bJoin').disabled = false; $('bHost').disabled = false; status('Offline','bad');
           err($('mStart'),'Could not reach the internet to check the PIN. Connect and try again.'); return; }
   peerId = PREFIX + pin; makePC();
@@ -311,11 +326,23 @@ $('bJoin').onclick = async () => {
   }, 30000);
 };
 
+async function linkType(){
+  try {
+    const st = await pc.getStats(); let pair;
+    st.forEach(x => { if (x.type === 'transport' && x.selectedCandidatePairId) pair = st.get(x.selectedCandidatePairId); });
+    if (!pair) st.forEach(x => { if (x.type === 'candidate-pair' && x.nominated && x.state === 'succeeded') pair = x; });
+    if (!pair) return;
+    const a = st.get(pair.localCandidateId), b = st.get(pair.remoteCandidateId);
+    const viaRelay = [a, b].some(c => c && c.candidateType === 'relay');
+    $('via').textContent = viaRelay ? ' · via relay' : ' · direct link';
+  } catch {}
+}
+
 // ---------- data channel ----------
 function setupChannel(ch){
   dc = ch; dc.binaryType = 'arraybuffer'; dc.bufferedAmountLowThreshold = BLOCK;
   dc.onopen = () => {
-    closeSignal(); paired = true; show('vPaired'); status('Paired','on'); keepAwake();
+    closeSignal(); paired = true; show('vPaired'); status('Paired','on'); keepAwake(); linkType();
     if (pending.length){ sendFiles(pending); pending = []; renderChosen(); }
   };
   dc.onclose = () => { if (paired || role) fail('The other device disconnected.'); };
